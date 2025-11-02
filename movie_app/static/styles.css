@@ -1,0 +1,33 @@
+body {
+    background-color: #111;
+    color: #fff;
+    font-family: "Poppins", sans-serif;
+    text-align: center;
+    padding: 40px;
+}
+
+.container {
+    width: 70%;
+    margin: auto;
+    background: #1f1f1f;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 0 10px #000;
+}
+
+ul {
+    list-style: none;
+    padding: 0;
+}
+
+li {
+    background: #2c2c2c;
+    margin: 10px;
+    padding: 12px;
+    border-radius: 8px;
+    transition: background 0.3s;
+}
+
+li:hover {
+    background: #3c3c3c;
+}

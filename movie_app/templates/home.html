@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>🎬 20 Random Films</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 20 Random Films from Dataset</h1>
+        <ul>
+            {% for film in films %}
+                <li><strong>{{ film['Name'] }}</strong> ({{ film['Year'] }})</li>
+            {% endfor %}
+        </ul>
+    </div>
+</body>
+</html>
