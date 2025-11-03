@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between mb-4">
+  <h2>Your Watch History</h2>
+  <div>
+    <a class="btn btn-outline-primary me-2" id="dashboardLink" href="/dashboard">Dashboard</a>
+    <a class="btn btn-sm btn-light" href="/">Logout</a>
+  </div>
+</div>
+
+<!-- Analytics Cards -->
+<div class="row mb-4">
+  <div class="col-md-3">
+    <div class="stat-box">
+      <h6 class="text-muted">Total Watch Time</h6>
+      <div id="totalWatchTime" class="fs-3 fw-bold">—</div>
+      <small class="text-muted" id="watchTimeUnit">minutes</small>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-box">
+      <h6 class="text-muted">Movies Rated</h6>
+      <div id="moviesRated" class="fs-3 fw-bold">—</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-box">
+      <h6 class="text-muted">Average Rating</h6>
+      <div id="averageRating" class="fs-3 fw-bold">—</div>
+      <small class="text-muted">out of 5</small>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="stat-box">
+      <h6 class="text-muted">Top Genre</h6>
+      <div id="topGenre" class="fs-4 fw-bold">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts Row -->
+<div class="row mb-4">
+  <div class="col-md-6">
+    <div class="stat-box">
+      <h5>Genre Distribution</h5>
+      <canvas id="genreChart" style="max-height:300px"></canvas>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="stat-box">
+      <h5>Rating Distribution</h5>
+      <canvas id="ratingChart" style="max-height:300px"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Watch History List -->
+<div class="row mb-4">
+  <div class="col-12">
+    <div class="stat-box">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0">All Rated Movies</h5>
+        <div>
+          <label class="me-2">Sort by:</label>
+          <select id="sortSelect" class="form-select form-select-sm d-inline-block" style="width:auto">
+            <option value="recent">Most Recent</option>
+            <option value="rating">Highest Rated</option>
+            <option value="year">Year (Newest)</option>
+            <option value="duration">Duration</option>
+          </select>
+        </div>
+      </div>
+      <div id="watchHistory" class="row">
+        <p class="text-muted">Loading...</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const userId = new URLSearchParams(window.location.search).get('user_id') || 1;
+
+// Load analytics
+async function loadAnalytics() {
+  try {
+    const res = await fetch(`/api/user/analytics?user_id=${userId}`);
+    const data = await res.json();
+    
+    // Total watch time
+    const totalHours = data.total_watch_time_hours || 0;
+    const totalMinutes = data.total_watch_time || 0;
+    if (totalHours >= 1) {
+      document.getElementById('totalWatchTime').innerText = totalHours.toFixed(1);
+      document.getElementById('watchTimeUnit').innerText = 'hours';
+    } else {
+      document.getElementById('totalWatchTime').innerText = totalMinutes;
+      document.getElementById('watchTimeUnit').innerText = 'minutes';
+    }
+    
+    // Movies rated
+    document.getElementById('moviesRated').innerText = data.movies_rated || 0;
+    
+    // Average rating
+    document.getElementById('averageRating').innerText = data.average_rating || '0.0';
+    
+    // Top genre
+    const genreData = data.genre_distribution || [];
+    if (genreData.length > 0) {
+      document.getElementById('topGenre').innerText = genreData[0].genre;
+    } else {
+      document.getElementById('topGenre').innerText = 'None';
+    }
+    
+    // Genre distribution chart
+    if (genreData.length > 0) {
+      const labels = genreData.slice(0, 10).map(g => g.genre);
+      const counts = genreData.slice(0, 10).map(g => g.count);
+      
+      const ctx1 = document.getElementById('genreChart').getContext('2d');
+      if(window.genreChart) window.genreChart.destroy();
+      window.genreChart = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Movies',
+            data: counts,
+            backgroundColor: '#4e79a7'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: {
+                stepSize: 1
+              }
+            }
+          }
+        }
+      });
+    }
+    
+    // Rating distribution chart
+    const ratingDist = data.rating_distribution || {};
+    const ratingLabels = ['1', '2', '3', '4', '5'];
+    const ratingData = ratingLabels.map(r => ratingDist[r] || 0);
+    
+    const ctx2 = document.getElementById('ratingChart').getContext('2d');
+    if(window.ratingChart) window.ratingChart.destroy();
+    window.ratingChart = new Chart(ctx2, {
+      type: 'doughnut',
+      data: {
+        labels: ratingLabels,
+        datasets: [{
+          data: ratingData,
+          backgroundColor: [
+            '#dc3545', '#fd7e14', '#ffc107', '#20c997', '#198754'
+          ]
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: {
+            position: 'bottom'
+          }
+        }
+      }
+    });
+  } catch(e) {
+    console.error('Error loading analytics:', e);
+  }
+}
+
+// Load watch history
+async function loadWatchHistory() {
+  try {
+    const res = await fetch(`/api/user/archive?user_id=${userId}`);
+    const data = await res.json();
+    const archive = data.archive || [];
+    
+    if (archive.length === 0) {
+      document.getElementById('watchHistory').innerHTML = 
+        '<div class="col-12"><p class="text-muted text-center py-4">No movies rated yet. <a href="/dashboard">Go to dashboard</a> to start rating movies!</p></div>';
+      return;
+    }
+    
+    // Sort function
+    function sortMovies(movies, sortBy) {
+      const sorted = [...movies];
+      switch(sortBy) {
+        case 'rating':
+          return sorted.sort((a, b) => (b.user_rating || 0) - (a.user_rating || 0));
+        case 'year':
+          return sorted.sort((a, b) => (b.Year || 0) - (a.Year || 0));
+        case 'duration':
+          return sorted.sort((a, b) => (b.Duration || 0) - (a.Duration || 0));
+        case 'recent':
+        default:
+          return sorted; // Already sorted by timestamp in backend
+      }
+    }
+    
+    // Render movies
+    function renderMovies(movies) {
+      const container = document.getElementById('watchHistory');
+      container.innerHTML = '';
+      
+      movies.forEach(movie => {
+        const card = document.createElement('div');
+        card.className = 'col-md-6 col-lg-4 mb-3';
+        card.innerHTML = `
+          <div class="card h-100">
+            <div class="row g-0">
+              <div class="col-4">
+                <img src="${movie.poster || 'https://via.placeholder.com/150x200'}" 
+                     class="img-fluid rounded-start" 
+                     style="height:200px; object-fit:cover; width:100%"
+                     alt="${movie.Name}">
+              </div>
+              <div class="col-8">
+                <div class="card-body p-2">
+                  <h6 class="card-title mb-1">${movie.Name}</h6>
+                  <small class="text-muted d-block mb-1">${movie.Year} • ${movie.Duration} min</small>
+                  <div class="mb-2">
+                    <span class="badge bg-primary">Your Rating: ${movie.user_rating ? movie.user_rating.toFixed(1) : 'N/A'}</span>
+                    <span class="badge bg-secondary ms-1">Avg: ${movie.avg_rating ? movie.avg_rating.toFixed(1) : 'N/A'}</span>
+                  </div>
+                  <div class="d-flex gap-1">
+                    <a href="/movie/${movie.movie_id}?user_id=${userId}" class="btn btn-sm btn-outline-primary">View</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+    
+    // Initial render
+    let sortedMovies = sortMovies(archive, 'recent');
+    renderMovies(sortedMovies);
+    
+    // Sort handler
+    document.getElementById('sortSelect').addEventListener('change', (e) => {
+      sortedMovies = sortMovies(archive, e.target.value);
+      renderMovies(sortedMovies);
+    });
+    
+  } catch(e) {
+    console.error('Error loading watch history:', e);
+    document.getElementById('watchHistory').innerHTML = 
+      '<div class="col-12"><p class="text-danger">Error loading watch history. Please try again.</p></div>';
+  }
+}
+
+// Initial load
+(async () => {
+  // Set dashboard link with user_id
+  document.getElementById('dashboardLink').href = `/dashboard?user_id=${userId}`;
+  
+  await Promise.all([loadAnalytics(), loadWatchHistory()]);
+})();
+</script>
+{% endblock %}
+

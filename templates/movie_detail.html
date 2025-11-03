@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="loading" class="text-center py-5">
+  <div class="spinner-border" role="status">
+    <span class="visually-hidden">Loading...</span>
+  </div>
+  <p class="mt-2 text-muted">Loading movie details...</p>
+</div>
+
+<div id="movieContent" style="display: none;">
+  <div class="mb-3">
+    <a href="/dashboard" id="backLink" class="btn btn-outline-secondary">
+      <i class="fas fa-arrow-left"></i> Back to Dashboard
+    </a>
+  </div>
+
+  <div class="row">
+    <!-- Movie Poster -->
+    <div class="col-md-4 mb-4">
+      <img id="moviePoster" src="" class="img-fluid rounded shadow" style="max-height: 700px; width: 100%; object-fit: cover;" alt="Movie Poster" onerror="this.src='https://via.placeholder.com/500x750?text=No+Poster'">
+    </div>
+
+    <!-- Movie Details -->
+    <div class="col-md-8">
+      <h1 id="movieName" class="mb-2"></h1>
+      
+      <div class="mb-3">
+        <span id="movieYear" class="badge bg-secondary me-2"></span>
+        <span id="movieDuration" class="badge bg-info me-2"></span>
+        <span id="movieAvgRating" class="badge bg-warning text-dark me-2"></span>
+        <span id="movieVotes" class="text-muted small"></span>
+      </div>
+
+      <!-- Genres -->
+      <div class="mb-3">
+        <h6>Genres</h6>
+        <div id="genresContainer" class="d-flex flex-wrap gap-2"></div>
+      </div>
+
+      <!-- Cast & Crew -->
+      <div class="row mb-3">
+        <div class="col-md-6">
+          <h6>Director</h6>
+          <p id="movieDirector" class="text-muted">—</p>
+        </div>
+        <div class="col-md-6">
+          <h6>Cast</h6>
+          <ul id="movieCast" class="list-unstyled text-muted"></ul>
+        </div>
+      </div>
+
+      <!-- User Rating Section (if logged in) -->
+      <div id="userRatingSection" class="mb-4" style="display: none;">
+        <h6>Your Rating</h6>
+        <div class="d-flex align-items-center gap-3">
+          <div class="btn-group" role="group">
+            <button type="button" class="btn btn-outline-primary rating-btn" data-rating="1">1</button>
+            <button type="button" class="btn btn-outline-primary rating-btn" data-rating="2">2</button>
+            <button type="button" class="btn btn-outline-primary rating-btn" data-rating="3">3</button>
+            <button type="button" class="btn btn-outline-primary rating-btn" data-rating="4">4</button>
+            <button type="button" class="btn btn-outline-primary rating-btn" data-rating="5">5</button>
+          </div>
+          <span id="currentUserRating" class="badge bg-success"></span>
+        </div>
+        <small class="text-muted d-block mt-2">Click a number to rate this movie</small>
+      </div>
+
+      <!-- ML Predictions (if logged in) -->
+      <div id="mlPredictions" class="mb-4" style="display: none;">
+        <h6>Personalized Prediction</h6>
+        <div class="stat-box">
+          <p class="mb-1">
+            <strong>Predicted Rating:</strong> 
+            <span id="predictedRating" class="badge bg-primary"></span>
+          </p>
+          <p class="mb-0 text-muted small">
+            <span id="predictionConfidence"></span>
+          </p>
+        </div>
+      </div>
+
+      <!-- Apriori Reasons -->
+      <div id="aprioriSection" class="mb-4" style="display: none;">
+        <h6>Why You Might Like This</h6>
+        <div id="aprioriReasons" class="stat-box"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error Message -->
+  <div id="errorMessage" class="alert alert-danger" style="display: none;">
+    <h4>Movie Not Found</h4>
+    <p id="errorText"></p>
+    <a href="/dashboard" class="btn btn-primary">Go to Dashboard</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const movieId = {{ movie_id if movie_id else 'null' }};
+const userId = new URLSearchParams(window.location.search).get('user_id');
+
+// Show error message
+function showError(message) {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('errorMessage').style.display = 'block';
+  if (document.getElementById('errorText')) {
+    document.getElementById('errorText').textContent = message;
+  }
+}
+
+// Check if movie ID is valid
+if (!movieId) {
+  showError('Movie not found');
+} else {
+  // Set back link
+  if (userId) {
+    document.getElementById('backLink').href = `/dashboard?user_id=${userId}`;
+  }
+}
+
+// Load movie data
+async function loadMovie() {
+  try {
+    const res = await fetch(`/api/movie/${movieId}`);
+    const data = await res.json();
+    
+    if (data.error) {
+      showError(data.error);
+      return;
+    }
+
+    // Display movie data
+    document.getElementById('movieName').textContent = data.Name || 'Unknown Movie';
+    document.getElementById('moviePoster').src = data.poster || 'https://via.placeholder.com/300x420?text=No+Poster';
+    document.getElementById('movieYear').textContent = data.Year || 'N/A';
+    document.getElementById('movieDuration').textContent = `${data.Duration || 0} min`;
+    document.getElementById('movieAvgRating').textContent = `★ ${data.avg_rating?.toFixed(1) || 'N/A'}`;
+    document.getElementById('movieVotes').textContent = `(${data.votes || 0} votes)`;
+    
+    // Director
+    document.getElementById('movieDirector').textContent = data.director || '—';
+    
+    // Cast
+    const castList = document.getElementById('movieCast');
+    castList.innerHTML = '';
+    const actors = [data.actor1, data.actor2, data.actor3].filter(a => a);
+    if (actors.length > 0) {
+      actors.forEach(actor => {
+        const li = document.createElement('li');
+        li.textContent = actor;
+        castList.appendChild(li);
+      });
+    } else {
+      castList.innerHTML = '<li>—</li>';
+    }
+    
+    // Genres
+    const genresContainer = document.getElementById('genresContainer');
+    genresContainer.innerHTML = '';
+    try {
+      const genreDict = typeof data.genre_vector === 'string' 
+        ? JSON.parse(data.genre_vector) 
+        : data.genre_vector || {};
+      const genres = Object.keys(genreDict).filter(g => genreDict[g]);
+      if (genres.length > 0) {
+        genres.forEach(genre => {
+          const badge = document.createElement('span');
+          badge.className = 'badge bg-primary me-1 mb-1';
+          badge.textContent = genre;
+          genresContainer.appendChild(badge);
+        });
+      } else {
+        genresContainer.innerHTML = '<span class="text-muted">No genres available</span>';
+      }
+    } catch (e) {
+      genresContainer.innerHTML = '<span class="text-muted">No genres available</span>';
+    }
+    
+    // Apriori reasons
+    if (data.apriori_reasons && data.apriori_reasons.length > 0) {
+      const aprioriSection = document.getElementById('aprioriSection');
+      const aprioriReasons = document.getElementById('aprioriReasons');
+      aprioriSection.style.display = 'block';
+      aprioriReasons.innerHTML = '<ul class="mb-0">' +
+        data.apriori_reasons.slice(0, 5).map(r => `<li class="small">${r}</li>`).join('') +
+        '</ul>';
+    }
+    
+    // Load user-specific data if logged in
+    if (userId) {
+      await loadUserData(movieId, userId);
+    }
+    
+    // Show content
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('movieContent').style.display = 'block';
+  } catch (error) {
+    console.error('Error loading movie:', error);
+    showError('Failed to load movie data. Please try again.');
+  }
+}
+
+// Load user-specific data (rating, prediction)
+async function loadUserData(movieId, userId) {
+  try {
+    // Load user rating
+    const archiveRes = await fetch(`/api/user/archive?user_id=${userId}`);
+    const archiveData = await archiveRes.json();
+    const userRating = archiveData.archive?.find(m => m.movie_id === movieId)?.user_rating;
+    
+    if (userRating) {
+      document.getElementById('userRatingSection').style.display = 'block';
+      document.getElementById('currentUserRating').textContent = `Your rating: ${userRating.toFixed(1)}`;
+      // Highlight current rating button
+      document.querySelectorAll('.rating-btn').forEach(btn => {
+        if (parseInt(btn.dataset.rating) === Math.round(userRating)) {
+          btn.classList.add('active');
+          btn.classList.remove('btn-outline-primary');
+          btn.classList.add('btn-primary');
+        }
+      });
+    } else {
+      document.getElementById('userRatingSection').style.display = 'block';
+    }
+    
+    // Setup rating buttons
+    document.querySelectorAll('.rating-btn').forEach(btn => {
+      btn.addEventListener('click', () => submitRating(movieId, userId, parseInt(btn.dataset.rating)));
+    });
+    
+    // Load prediction
+    const predictRes = await fetch(`/api/predict?user_id=${userId}&movie_id=${movieId}`);
+    const predictData = await predictRes.json();
+    
+    if (predictData.predicted_rating) {
+      document.getElementById('mlPredictions').style.display = 'block';
+      document.getElementById('predictedRating').textContent = predictData.predicted_rating.toFixed(1);
+      document.getElementById('predictionConfidence').textContent = 
+        `Confidence: ${(predictData.confidence * 100).toFixed(0)}%`;
+    }
+  } catch (error) {
+    console.error('Error loading user data:', error);
+  }
+}
+
+// Submit rating
+async function submitRating(movieId, userId, rating) {
+  try {
+    const res = await fetch('/api/rate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: parseInt(userId),
+        movie_id: movieId,
+        rating: rating
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (res.ok) {
+      // Update UI
+      document.getElementById('currentUserRating').textContent = `Your rating: ${rating}`;
+      
+      // Update button states
+      document.querySelectorAll('.rating-btn').forEach(btn => {
+        const btnRating = parseInt(btn.dataset.rating);
+        if (btnRating === rating) {
+          btn.classList.add('active');
+          btn.classList.remove('btn-outline-primary');
+          btn.classList.add('btn-primary');
+        } else {
+          btn.classList.remove('active');
+          btn.classList.remove('btn-primary');
+          btn.classList.add('btn-outline-primary');
+        }
+      });
+      
+      // Reload prediction after rating
+      if (userId) {
+        setTimeout(() => loadUserData(movieId, userId), 500);
+      }
+      
+      // Show success message
+      const alert = document.createElement('div');
+      alert.className = 'alert alert-success alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3';
+      alert.style.zIndex = '9999';
+      alert.innerHTML = `
+        <strong>Rating saved!</strong> Your rating has been recorded.
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+      `;
+      document.body.appendChild(alert);
+      
+      setTimeout(() => {
+        if (alert.parentNode) {
+          alert.remove();
+        }
+      }, 3000);
+    } else {
+      alert(data.error || 'Failed to save rating');
+    }
+  } catch (error) {
+    console.error('Error submitting rating:', error);
+    alert('Error saving rating. Please try again.');
+  }
+}
+
+// Initialize (only if movie ID is valid)
+if (movieId) {
+  loadMovie();
+}
+</script>
+
+<style>
+.rating-btn {
+  min-width: 50px;
+}
+
+.rating-btn.active {
+  font-weight: bold;
+}
+
+.stat-box {
+  background: #fff;
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+</style>
+{% endblock %}
+
