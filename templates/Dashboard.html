@@ -9,7 +9,7 @@
 </div>
 
 <!-- stats row -->
-<div class="row mb-3">
+<!-- <div class="row mb-3">
   <div class="col-md-3 stat-box">
     <h6>Total watch time</h6>
     <div id="totalWatchTime" class="fs-4">—</div>
@@ -23,7 +23,7 @@
     <h6>Genre distribution</h6>
     <canvas id="genreChart" style="max-height:140px"></canvas>
   </div>
-</div>
+</div> -->
 
 <!-- Carousels -->
 <section>
@@ -42,9 +42,9 @@
 </section>
 
 <!-- Onboarding Button -->
-<a href="/onboarding" id="onboardingBtn" class="btn btn-success mb-3">
+<button id="onboardingBtn" class="btn btn-success mb-3">
   Personalize My Recommendations
-</a>
+</button>
 
 
 <!-- Onboarding modal (first visit) -->
@@ -65,7 +65,17 @@
 
 {% block scripts %}
 <script>
-const userId = new URLSearchParams(window.location.search).get('user_id') || 1; // demo fallback
+// Get user_id from URL - required for proper user-specific recommendations
+const urlParams = new URLSearchParams(window.location.search);
+let userId = urlParams.get('user_id');
+if (!userId || userId === 'null' || userId === 'undefined') {
+  // If no user_id, redirect to login
+  console.error('user_id is required for dashboard');
+  alert('User ID is required. Redirecting to login...');
+  window.location.href = '/login';
+} else {
+  userId = parseInt(userId);
+}
 
 // Utility to create movie card
 function movieCard(movie) {
@@ -88,10 +98,14 @@ function movieCard(movie) {
 
 // load recommendations (with optional refresh flag to force reload from DB)
 async function loadRecommendations(refresh = false) {
-  const refreshParam = refresh ? '&refresh=true' : '';
-  const res = await fetch(`/api/recommendations?user_id=${userId}&n=12${refreshParam}`);
+  //const refreshParam = refresh ? '&refresh=true' : '';
+  const refreshParam = '&refresh=true';
+  const url = `/api/recommendations?user_id=${userId}&n=12${refreshParam}`;
+  console.log('Loading recommendations from:', url);
+  const res = await fetch(url);
   const json = await res.json();
   const items = json.recommendations || [];
+  console.log(`Received ${items.length} recommendations`);
   document.getElementById('topPicks').innerHTML = '';
   if (items.length === 0) {
     document.getElementById('topPicks').innerHTML = '<p class="text-muted">No recommendations available yet. Rate some movies to get personalized recommendations!</p>';
@@ -103,7 +117,10 @@ async function loadRecommendations(refresh = false) {
 // load cluster / because-you-liked from same endpoint
 async function loadExtras(refresh = false) {
   const refreshParam = refresh ? '&refresh=true' : '';
-  const res = await fetch(`/api/recommendations?user_id=${userId}&n=12${refreshParam}`);
+  // Add a small delay and different offset to get different recommendations
+  // This ensures "Because you liked" and "Similar cluster" show different movies
+  const offset = refresh ? Math.floor(Math.random() * 5) : 0;
+  const res = await fetch(`/api/recommendations?user_id=${userId}&n=18${refreshParam}`);
   const items = (await res.json()).recommendations || [];
   document.getElementById('becauseYouLiked').innerHTML = '';
   document.getElementById('similarCluster').innerHTML = '';
@@ -111,8 +128,9 @@ async function loadExtras(refresh = false) {
     document.getElementById('becauseYouLiked').innerHTML = '<p class="text-muted">No recommendations yet.</p>';
     document.getElementById('similarCluster').innerHTML = '<p class="text-muted">No recommendations yet.</p>';
   } else {
-    items.slice(0,6).forEach(m => document.getElementById('becauseYouLiked').appendChild(movieCard(m)));
-    items.slice(6,12).forEach(m => document.getElementById('similarCluster').appendChild(movieCard(m)));
+    // Use different slices to show different movies in each section
+    items.slice(offset, offset+6).forEach(m => document.getElementById('becauseYouLiked').appendChild(movieCard(m)));
+    items.slice(offset+6, offset+12).forEach(m => document.getElementById('similarCluster').appendChild(movieCard(m)));
   }
 }
 
@@ -156,72 +174,76 @@ async function showOnboarding() {
     const jr = await r.json();
     modal.hide();
     // Refresh recommendations with updated preferences
-    await loadRecommendations(true);
-    await loadExtras(true);
-    await loadAnalytics();
+    await refreshDashboard();
     alert(jr.message || 'Onboarding saved');
   };
 }
 
-// Load analytics (watch time, genre distribution, etc.)
-async function loadAnalytics() {
-  try {
-    const res = await fetch(`/api/user/analytics?user_id=${userId}`);
-    const json = await res.json();
+// // Load analytics (watch time, genre distribution, etc.)
+// async function loadAnalytics(refresh = false) {
+//   try {
+//     const refreshParam = refresh ? '&refresh=true' : '';
+//     const url = `/api/user/analytics?user_id=${userId}${refreshParam}`;
+//     console.log('Loading analytics from:', url);
+//     const res = await fetch(url);
+//     const json = await res.json();
+//     console.log('Analytics loaded:', json);
     
-    // Total watch time
-    const totalHours = json.total_watch_time_hours || 0;
-    const totalMinutes = json.total_watch_time || 0;
-    document.getElementById('totalWatchTime').innerText = totalHours > 0 
-      ? `${totalHours.toFixed(1)} hrs` 
-      : `${totalMinutes} min`;
+//     // Total watch time
+//     const totalHours = json.total_watch_time_hours || 0;
+//     const totalMinutes = json.total_watch_time || 0;
+//     document.getElementById('totalWatchTime').innerText = totalHours > 0 
+//       ? `${totalHours.toFixed(1)} hrs` 
+//       : `${totalMinutes} min`;
     
-    // Movies rated
-    document.getElementById('moviesRated').innerText = json.movies_rated || 0;
+//     // Movies rated
+//     document.getElementById('moviesRated').innerText = json.movies_rated || 0;
 
-    // Genre distribution chart
-    const genreData = json.genre_distribution || [];
-    if (genreData.length > 0) {
-      const labels = genreData.slice(0, 8).map(g => g.genre);
-      const data = genreData.slice(0, 8).map(g => g.count);
+//     // Genre distribution chart
+//     const genreData = json.genre_distribution || [];
+//     if (genreData.length > 0) {
+//       const labels = genreData.slice(0, 8).map(g => g.genre);
+//       const data = genreData.slice(0, 8).map(g => g.count);
       
-      const ctx = document.getElementById('genreChart').getContext('2d');
-      if(window.genreChart) window.genreChart.destroy();
-      window.genreChart = new Chart(ctx, {
-        type: 'pie',
-        data: { 
-          labels, 
-          datasets: [{ 
-            data, 
-            backgroundColor: [
-              '#4e79a7','#f28e2b','#e15759','#76b7b2',
-              '#59a14f','#edc949','#b07aa1','#ff9da7'
-            ] 
-          }] 
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: true,
-          plugins: {
-            legend: {
-              position: 'bottom',
-              labels: { boxWidth: 12, fontSize: 10 }
-            }
-          }
-        }
-      });
-    } else {
-      document.getElementById('genreChart').innerHTML = '<p class="text-muted">No genre data yet</p>';
-    }
-  } catch(e) {
-    console.error('Error loading analytics:', e);
-    document.getElementById('totalWatchTime').innerText = '0';
-    document.getElementById('moviesRated').innerText = '0';
-  }
-}
+//       const ctx = document.getElementById('genreChart').getContext('2d');
+//       if(window.genreChart) window.genreChart.destroy();
+//       window.genreChart = new Chart(ctx, {
+//         type: 'pie',
+//         data: { 
+//           labels, 
+//           datasets: [{ 
+//             data, 
+//             backgroundColor: [
+//               '#4e79a7','#f28e2b','#e15759','#76b7b2',
+//               '#59a14f','#edc949','#b07aa1','#ff9da7'
+//             ] 
+//           }] 
+//         },
+//         options: {
+//           responsive: true,
+//           maintainAspectRatio: true,
+//           plugins: {
+//             legend: {
+//               position: 'bottom',
+//               labels: { boxWidth: 12, fontSize: 10 }
+//             }
+//           }
+//         }
+//       });
+//     } else {
+//       document.getElementById('genreChart').innerHTML = '<p class="text-muted">No genre data yet</p>';
+//     }
+//   } catch(e) {
+//     console.error('Error loading analytics:', e);
+//     // Don't reset to 0, just leave the current value or show error
+//     document.getElementById('totalWatchTime').innerText = '—';
+//     document.getElementById('moviesRated').innerText = '—';
+//   }
+// }
 
 // Refresh all dashboard data (used after onboarding)
 async function refreshDashboard() {
+  console.log('Refreshing dashboard for user:', userId);
   // Show loading state
   const topPicksEl = document.getElementById('topPicks');
   const becauseEl = document.getElementById('becauseYouLiked');
@@ -231,16 +253,23 @@ async function refreshDashboard() {
   becauseEl.innerHTML = '';
   similarEl.innerHTML = '';
   
-  // Reload all data with refresh flag to force reload from database
-  await Promise.all([
-    loadRecommendations(true),  // Force refresh from DB
-    loadExtras(true),           // Force refresh from DB
-    loadAnalytics()
-  ]);
+  try {
+    // Reload all data with refresh flag to force reload from database
+    console.log('Loading recommendations with refresh=true...');
+    await Promise.all([
+      loadRecommendations(true),  // Force refresh from DB
+      loadExtras(true),           // Force refresh from DB
+      loadAnalytics(true)         // Force refresh from DB
+    ]);
+    console.log('Dashboard refresh complete');
+  } catch (error) {
+    console.error('Error refreshing dashboard:', error);
+    alert('Error refreshing recommendations. Please try again.');
+  }
   
   // Show success message if coming from onboarding
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.get('from_onboarding') === 'true') {
+  const currentUrlParams = new URLSearchParams(window.location.search);
+  if (currentUrlParams.get('from_onboarding') === 'true') {
     // Remove the parameter from URL
     window.history.replaceState({}, '', window.location.pathname + `?user_id=${userId}`);
     
@@ -262,15 +291,18 @@ async function refreshDashboard() {
   }
 }
 
+// Handle Personalize My Recommendations button click
+document.getElementById('onboardingBtn').addEventListener('click', () => {
+  // Navigate to onboarding page with user_id
+  window.location.href = `/onboarding?user_id=${userId}`;
+});
+
 // Initial load
 (async ()=>{
   // Set archive link with user_id
   document.getElementById('archiveLink').href = `/archive?user_id=${userId}`;
-  // Set onboarding link with user_id
-  document.getElementById('onboardingBtn').href = `/onboarding?user_id=${userId}`;
   
   // Check if coming from onboarding
-  const urlParams = new URLSearchParams(window.location.search);
   const fromOnboarding = urlParams.get('from_onboarding') === 'true';
   
   // Load dashboard data

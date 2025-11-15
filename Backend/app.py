@@ -26,6 +26,7 @@ import hashlib
 import json
 import ast
 import requests
+import random
 from functools import wraps
 from collections import defaultdict
 from math import log1p
@@ -214,9 +215,11 @@ def cosine_sim(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 def get_user_profile(user_id):
-    """Average feature vector of liked movies (rating >= 4)"""
+    """Weighted average feature vector of user's rated movies"""
     # Prefer DB-backed ratings if available
-    if str(user_id) in rating_matrix:
+    # Ensure user_id is int for consistent key usage
+    user_id = int(user_id)
+    if user_id in rating_matrix:
         user_ratings = rating_matrix[user_id]
     else:
         try:
@@ -225,13 +228,31 @@ def get_user_profile(user_id):
             user_ratings = {}
         rating_matrix[user_id] = user_ratings
 
-    liked = [mid for mid, r in user_ratings.items() if r >= 4]
-    if not liked:
+    if not user_ratings:
+        app.logger.debug(f"User {user_id} has no ratings")
         return np.zeros(movie_features.shape[1])
-    idxs = [movie_id_to_index[mid] for mid in liked if mid in movie_id_to_index]
-    if not idxs:
+    
+    # Use weighted average: higher ratings contribute more
+    # Include all ratings (not just >= 4) to get personalized recommendations
+    # Weight by (rating / 5.0) so 5.0 gets weight 1.0, 3.0 gets 0.6, 1.0 gets 0.2
+    weighted_features = []
+    total_weight = 0.0
+    
+    for mid, rating in user_ratings.items():
+        if mid in movie_id_to_index:
+            idx = movie_id_to_index[mid]
+            weight = rating / 5.0  # Normalize rating to 0-1
+            weighted_features.append(movie_features[idx] * weight)
+            total_weight += weight
+    
+    if not weighted_features or total_weight == 0:
+        app.logger.debug(f"User {user_id} has no valid movie ratings")
         return np.zeros(movie_features.shape[1])
-    return np.mean(movie_features[idxs, :], axis=0)
+    
+    # Return weighted average
+    profile = np.sum(weighted_features, axis=0) / total_weight
+    app.logger.debug(f"User {user_id} profile computed from {len(user_ratings)} ratings, total_weight={total_weight:.2f}")
+    return profile
 
 def get_knn_scores_for_user(user_id):
     up = get_user_profile(user_id)
@@ -263,12 +284,15 @@ def get_regressor_preds_for_user(user_id, mids):
 def apriori_boost_for_user(user_id, mids):
     boosts = {mid: 0.0 for mid in mids}
     reasons = defaultdict(list)
-    # get liked items
+    # Ensure user_id is int for consistent key usage
+    user_id = int(user_id)
+    # get liked items - use rating >= 3.5 to include neutral-leaning-positive ratings
     try:
         user_ratings = rating_matrix[user_id] if user_id in rating_matrix else (get_user_ratings(user_id) if use_db else {})
     except:
         user_ratings = {}
-    liked_mids = [mid for mid, r in (user_ratings or {}).items() if r >= 4]
+    # Include ratings >= 3.5 to catch more user preferences (onboarding neutral=3.0, but we'll use 3.5 for liked)
+    liked_mids = [mid for mid, r in (user_ratings or {}).items() if r >= 3.5]
     if not liked_mids:
         return boosts, reasons
     liked_items = set()
@@ -412,12 +436,24 @@ def onboarding():
     payload_hash = hashlib.sha1(payload_bytes).hexdigest()
     now = time.time()
     last = _last_onboarding_submission.get(str(user_id))
+    # Only skip if it's a true duplicate within the dedupe window (8 seconds)
+    # But allow re-submission if user wants to update preferences
     if last:
         last_hash, last_ts, last_resp = last
         if payload_hash == last_hash and (now - last_ts) <= _ONBOARDING_DEDUPE_WINDOW:
-            app.logger.info(f"onboarding: duplicate submission detected for user {user_id}, returning cached response")
+            app.logger.info(f"onboarding: duplicate submission detected for user {user_id} within {_ONBOARDING_DEDUPE_WINDOW}s, returning cached response")
+            # Still clear cache to ensure fresh recommendations
+            if user_id in rating_matrix:
+                del rating_matrix[user_id]
             return jsonify(last_resp), 200
+    # Clear cache always for fresh recommendations
+    if user_id in rating_matrix:
+        app.logger.info(f"onboarding: clearing cache for user {user_id} before saving preferences")
+        del rating_matrix[user_id]
 
+    # Ensure user_id is int for consistent key usage
+    user_id = int(user_id)
+    
     saved = 0
     for r in responses:
         try:
@@ -432,11 +468,19 @@ def onboarding():
         try:
             if use_db and callable(globals().get("save_rating", None)):
                 save_rating(user_id, movie_id, pseudo_rating)
+            if user_id not in rating_matrix:
+                rating_matrix[user_id] = {}
             rating_matrix[user_id][movie_id] = pseudo_rating
         except Exception:
+            if user_id not in rating_matrix:
+                rating_matrix[user_id] = {}
             rating_matrix[user_id][movie_id] = pseudo_rating
         saved += 1
 
+    # Ensure ratings are in cache after saving
+    if user_id not in rating_matrix:
+        rating_matrix[user_id] = {}
+    
     # Simple popularity-based fallback recommendations
     rated_movie_ids = set(rating_matrix[user_id].keys())
     all_movies = list(_movies_map.values())
@@ -444,7 +488,7 @@ def onboarding():
     out = [{"movie_id": m["movie_id"], "name": m["Name"], "year": m["Year"], "poster": m.get("poster")} for m in recs]
     response_body = {"message": f"saved {saved} responses", "recommendations": out}
     _last_onboarding_submission[str(user_id)] = (payload_hash, now, response_body)
-    app.logger.info(f"onboarding: saved {saved} responses for user {user_id}")
+    app.logger.info(f"onboarding: saved {saved} responses for user {user_id}, ratings now in cache: {len(rating_matrix[user_id])}")
     return jsonify(response_body), 200
 
 # -----------------------------
@@ -463,8 +507,12 @@ def api_rate():
     try:
         if use_db and callable(globals().get("save_rating", None)):
             save_rating(user_id, movie_id, rating)
+        if user_id not in rating_matrix:
+            rating_matrix[user_id] = {}
         rating_matrix[user_id][movie_id] = rating
     except Exception as e:
+        if user_id not in rating_matrix:
+            rating_matrix[user_id] = {}
         rating_matrix[user_id][movie_id] = rating
     return jsonify({"message":"rating saved"}), 201
 
@@ -484,10 +532,23 @@ def api_recommendations():
         return jsonify({"error":"user_id must be int-like"}), 400
 
     # Force refresh from DB if requested (useful after onboarding)
+    # Always refresh if force_refresh is True, or if user not in cache
+    if force_refresh:
+        # Clear cache for this user to force fresh load
+        if user_id in rating_matrix:
+            app.logger.info(f"Force refresh requested for user {user_id}, clearing cache")
+            del rating_matrix[user_id]
+    
     if force_refresh or user_id not in rating_matrix:
         try:
-            rating_matrix[user_id] = get_user_ratings(user_id) if use_db else {}
-        except:
+            if use_db:
+                app.logger.info(f"Loading ratings from DB for user {user_id}")
+                rating_matrix[user_id] = get_user_ratings(user_id)
+                app.logger.info(f"Loaded {len(rating_matrix[user_id])} ratings from DB for user {user_id}")
+            else:
+                rating_matrix[user_id] = {}
+        except Exception as e:
+            app.logger.error(f"Error loading ratings for user {user_id}: {e}")
             rating_matrix[user_id] = {}
 
     rated = set(rating_matrix[user_id].keys())
@@ -495,10 +556,22 @@ def api_recommendations():
     if not candidate_mids:
         return jsonify({"recommendations": []}), 200
 
+    # Log user ratings for debugging
+    user_ratings_count = len(rating_matrix[user_id])
+    app.logger.info(f"Generating recommendations for user {user_id} with {user_ratings_count} ratings")
+    if user_ratings_count > 0:
+        sample_ratings = list(rating_matrix[user_id].items())[:5]
+        app.logger.info(f"Sample ratings for user {user_id}: {sample_ratings}")
+    
     app.logger.info("Generating recommendations using: KMeans, Regressor, KNN, Apriori")
     reg_preds = get_regressor_preds_for_user(user_id, candidate_mids)
     knn_scores = get_knn_scores_for_user(user_id)
     apr_boosts, apr_reasons = apriori_boost_for_user(user_id, candidate_mids)
+    
+    # Log scores for debugging
+    if knn_scores:
+        top_knn = sorted(knn_scores.items(), key=lambda x: x[1], reverse=True)[:3]
+        app.logger.info(f"Top 3 KNN scores for user {user_id}: {top_knn}")
 
     items = []
     for mid in candidate_mids:
@@ -518,7 +591,24 @@ def api_recommendations():
         out["apriori_reasons"] = apr_reasons.get(mid, [])
         items.append(out)
 
-    items_sorted = sorted(items, key=lambda x: (x["hybrid_score"], x["popularity_score"]), reverse=True)
+    # Sort by hybrid_score first, but also include some diversity
+    # Add timestamp component to seed so recommendations rotate on each refresh
+    # This ensures recommendations change when user clicks "Personalize My Recommendations"
+    seed_value = user_id * 1000 + int(time.time() * 100) % 1000
+    random.seed(seed_value)
+    
+    for item in items:
+        # Add small random component (0-0.02) to hybrid_score to break ties and add variety
+        # This ensures recommendations rotate and different users get different results
+        item["_diversity_boost"] = random.random() * 0.02
+        item["_final_score"] = item["hybrid_score"] + item["_diversity_boost"]
+    
+    # Sort by final_score (hybrid + diversity), then by popularity as tiebreaker
+    items_sorted = sorted(items, key=lambda x: (x["_final_score"], x["popularity_score"]), reverse=True)
+    
+    top_recs = [(x['movie_id'], x['Name'], f"hybrid={x['hybrid_score']:.4f}, final={x['_final_score']:.4f}") for x in items_sorted[:3]]
+    app.logger.info(f"Top 3 recommendations for user {user_id}: {top_recs}")
+    
     return jsonify({"recommendations": items_sorted[:n]}), 200
 
 # -----------------------------
@@ -604,6 +694,7 @@ def api_archive():
         return jsonify({"error":"user_id must be int-like"}), 400
     if user_id in rating_matrix:
         user_ratings = rating_matrix[user_id]
+        app.logger.info(f"Archive: Loaded {len(user_ratings)} ratings from cache for user {user_id}")
     else:
         try:
             user_ratings = get_user_ratings(user_id) if use_db else {}
@@ -626,6 +717,8 @@ def api_archive():
 def api_analytics():
     """Get user analytics: watch time, genre distribution, etc."""
     user_id = request.args.get('user_id')
+    force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+    
     if not user_id:
         return jsonify({"error": "user_id required"}), 400
     try:
@@ -633,15 +726,26 @@ def api_analytics():
     except:
         return jsonify({"error": "user_id must be int-like"}), 400
     
+    # Force refresh from DB if requested
+    if force_refresh:
+        if user_id in rating_matrix:
+            app.logger.info(f"Analytics: Force refresh requested for user {user_id}, clearing cache")
+            del rating_matrix[user_id]
+    
     # Get user ratings
-    if user_id in rating_matrix:
-        user_ratings = rating_matrix[user_id]
-    else:
+    if force_refresh or user_id not in rating_matrix:
         try:
-            user_ratings = get_user_ratings(user_id) if use_db else {}
-        except:
-            user_ratings = {}
-        rating_matrix[user_id] = user_ratings
+            if use_db:
+                app.logger.info(f"Analytics: Loading ratings from DB for user {user_id}")
+                rating_matrix[user_id] = get_user_ratings(user_id)
+                app.logger.info(f"Analytics: Loaded {len(rating_matrix[user_id])} ratings from DB for user {user_id}")
+            else:
+                rating_matrix[user_id] = {}
+        except Exception as e:
+            app.logger.error(f"Analytics: Error loading ratings for user {user_id}: {e}")
+            rating_matrix[user_id] = {}
+    
+    user_ratings = rating_matrix[user_id]
     
     # Calculate analytics
     total_watch_time = 0
