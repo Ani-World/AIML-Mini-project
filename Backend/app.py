@@ -20,12 +20,13 @@ import os, time, hashlib, json
 from collections import defaultdict
 from math import log1p
 from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 import numpy as np
 import joblib
-import os
+import requests
 
-# Path to models folder
+
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
 
 # Load KMeans model
@@ -36,53 +37,57 @@ regressor_model = joblib.load(os.path.join(MODEL_DIR, "regressor_model.pkl"))
 
 print(f"Loaded models: {type(kmeans_model).__name__}, {type(regressor_model).__name__}")
 
+from flask import send_from_directory
+
 app = Flask(__name__)
 CORS(app)
 
 # -----------------------------
-# Simple in-memory / lightweight persistence (for demo)
+# Database configuration
 # -----------------------------
-# Seed 20 movies (movie_id 1..20) with CSV-like fields
-_movies = [
-    (1, "The First Dawn", 2018, 110, 4.1, 1200, "Dir A", "Actor A1", "Actor A2", "Actor A3", 120),
-    (2, "Silent Echoes", 2019, 95, 3.9, 950, "Dir B", "Actor B1", "Actor B2", "Actor B3", 95),
-    (3, "Midnight Run", 2020, 125, 4.5, 2000, "Dir C", "Actor C1", "Actor C2", "Actor C3", 200),
-    (4, "River of Stars", 2017, 105, 4.2, 1500, "Dir D", "Actor D1", "Actor D2", "Actor D3", 150),
-    (5, "Lonely Planet", 2016, 100, 3.7, 800, "Dir E", "Actor E1", "Actor E2", "Actor E3", 80),
-    (6, "Neon Street", 2021, 115, 4.3, 1400, "Dir F", "Actor F1", "Actor F2", "Actor F3", 140),
-    (7, "Fading Letters", 2015, 98, 3.5, 650, "Dir G", "Actor G1", "Actor G2", "Actor G3", 65),
-    (8, "Glass Garden", 2022, 130, 4.6, 1800, "Dir H", "Actor H1", "Actor H2", "Actor H3", 180),
-    (9, "Paper Wings", 2014, 90, 3.2, 550, "Dir I", "Actor I1", "Actor I2", "Actor I3", 55),
-    (10, "Stone Harbor", 2013, 108, 3.8, 700, "Dir J", "Actor J1", "Actor J2", "Actor J3", 70),
-    (11, "Echo Valley", 2021, 112, 4.0, 1100, "Dir K", "Actor K1", "Actor K2", "Actor K3", 110),
-    (12, "Crimson Tide", 2020, 122, 4.4, 1600, "Dir L", "Actor L1", "Actor L2", "Actor L3", 160),
-    (13, "Hidden Paths", 2019, 99, 3.9, 900, "Dir M", "Actor M1", "Actor M2", "Actor M3", 90),
-    (14, "Velvet Morning", 2018, 104, 4.15, 1300, "Dir N", "Actor N1", "Actor N2", "Actor N3", 130),
-    (15, "Paper Moon", 2017, 97, 3.6, 750, "Dir O", "Actor O1", "Actor O2", "Actor O3", 75),
-    (16, "Neptune's Call", 2016, 103, 3.85, 820, "Dir P", "Actor P1", "Actor P2", "Actor P3", 85),
-    (17, "Wandering Light", 2015, 92, 3.3, 600, "Dir Q", "Actor Q1", "Actor Q2", "Actor Q3", 60),
-    (18, "City of Quiet", 2014, 94, 3.1, 500, "Dir R", "Actor R1", "Actor R2", "Actor R3", 50),
-    (19, "Last Harbor", 2013, 106, 3.05, 420, "Dir S", "Actor S1", "Actor S2", "Actor S3", 40),
-    (20, "Aurora Lane", 2022, 118, 4.55, 1700, "Dir T", "Actor T1", "Actor T2", "Actor T3", 170),
-]
+db_path = os.path.join(os.path.dirname(__file__), '..', 'instance', 'movies.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+db = SQLAlchemy(app)
+
+import threading, time, requests
+
+# -----------------------------
+# Load movies quickly
+# -----------------------------
 _movies_map = {}
-for t in _movies:
-    movie_id = t[0]
-    _movies_map[movie_id] = {
-        "movie_id": movie_id,
-        "Name": t[1],
-        "Year": t[2],
-        "Duration": t[3],
-        "Rating": float(t[4]),
-        "Votes": int(t[5]),
-        "Director": t[6],
-        "Actor 1": t[7],
-        "Actor 2": t[8],
-        "Actor 3": t[9],
-        "poster": f"https://via.placeholder.com/300x420?text={movie_id}",
-        "popularity": t[10],
-    }
+
+def load_movies_quickly():
+    global _movies_map
+    with app.app_context():
+        try:
+            with db.engine.connect() as conn:
+                result = conn.execute(db.text("SELECT rowid AS movie_id, * FROM movies"))
+                for row in result.mappings():
+                    mid = int(row.get("movie_id"))
+                    name = row.get("name") or "Unknown"
+                    poster_url = row.get("poster_url") or f"https://via.placeholder.com/300x420/1a1a2e/ffffff?text={name.replace(' ', '+')}"
+
+                    _movies_map[mid] = {
+                        "movie_id": mid,
+                        "Name": name,
+                        "Year": int(row.get("year") or 0),
+                        "Duration": int(row.get("duration") or 0),
+                        "Rating": float(row.get("avg_rating") or 0.0),
+                        "Votes": int(row.get("votes") or 0),
+                        "Director": row.get("director") or "Unknown",
+                        "Actor 1": row.get("actor1") or "Unknown",
+                        "Actor 2": row.get("actor2") or "Unknown",
+                        "Actor 3": row.get("actor3") or "Unknown",
+                        "poster": poster_url,
+                        "popularity": int(row.get("votes") or 100),
+                    }
+
+            print(f"✅ Loaded {len(_movies_map)} movies from movies.db (startup fast mode)")
+        except Exception as e:
+            print("❌ Error loading movies from database:", e)
+
 
 # -----------------------------
 # Variables requested (names used)
@@ -135,17 +140,19 @@ _ONBOARDING_DEDUPE_WINDOW = 8      # seconds
 def movie_to_output(m):
     return {
         "movie_id": m["movie_id"],
-        "Name": m["Name"],
-        "Year": int(m["Year"]),
-        "Duration": int(m["Duration"]),
-        "avg_rating": float(m["Rating"]),
-        "votes": int(m["Votes"]),
-        "director": m["Director"],
-        "actor1": m["Actor 1"],
-        "actor2": m["Actor 2"],
-        "actor3": m["Actor 3"],
-        "poster": m.get("poster"),
-        "popularity_score": round(m["popularity"] * (m["Rating"] / 5.0) * log1p(m["Votes"]), 3)
+        "name": m.get("Name", "Unknown"),
+        "year": int(m.get("Year", 0)),
+        "duration": int(m.get("Duration", 0)),
+        "rating": float(m.get("Rating", 0.0)),
+        "votes": int(m.get("Votes", 0)),
+        "director": m.get("Director", "Unknown"),
+        "actor1": m.get("Actor 1", "Unknown"),
+        "actor2": m.get("Actor 2", "Unknown"),
+        "actor3": m.get("Actor 3", "Unknown"),
+        "poster": m.get("poster", f"https://via.placeholder.com/300x420?text={m['movie_id']}"),
+        "popularity_score": round(
+            (m.get("popularity", 100) * (m.get("Rating", 0) / 5.0) * log1p(m.get("Votes", 1))), 3
+        )
     }
 
 def cosine_sim(a, b):
@@ -202,6 +209,8 @@ def apriori_boost_for_user(user_id, mids):
 _users = {}
 _next_user_id = 1
 
+
+
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     global _next_user_id
@@ -229,9 +238,28 @@ def login():
 # -----------------------------
 # Movies for onboarding
 # -----------------------------
+import random
+
 @app.route('/api/movies/onboarding', methods=['GET'])
 def movies_onboarding():
-    movies = [ {"movie_id": m["movie_id"], "name": m["Name"], "year": m["Year"], "poster": m.get("poster")} for m in _movies_map.values() ]
+    # Filter: only movies with avg_rating > 3
+    eligible = [m for m in _movies_map.values() if m.get("Rating", 0) > 3]
+
+    # Randomly select 25 (or fewer if not enough)
+    random_movies = random.sample(eligible, min(25, len(eligible)))
+
+    # Format the output
+    movies = [
+        {
+            "movie_id": m["movie_id"],
+            "name": m["Name"],
+            "year": m["Year"],
+            "poster": m.get("poster"),
+            "rating": m.get("Rating"),
+        }
+        for m in random_movies
+    ]
+
     return jsonify({"movies": movies}), 200
 
 # -----------------------------
@@ -303,6 +331,8 @@ def api_rate():
     user_id = data.get('user_id')
     movie_id = data.get('movie_id')
     rating = data.get('rating')
+    rating = rating / 2.0
+
     if user_id is None or movie_id is None or rating is None:
         return jsonify({"error":"user_id, movie_id, rating required"}), 400
     try:
@@ -351,13 +381,16 @@ def api_recommendations():
         out["cluster_id"] = cluster_assignments.get(mid)
         out["hybrid_score"] = round(float(hybrid_score), 4)
         out["reg_score"] = round(float(reg_score),4)
+        out["rating"] = round(float(out["rating"]), 1) if "rating" in out else 0.0
+        out["predicted_display"] = round(float(reg_score) * 10 / 5, 1)
         out["knn_score"] = round(float(knn_score),4)
         out["apr_score"] = round(float(apr_score),4)
         out["apriori_reasons"] = apr_reasons.get(mid, [])
+
         items.append(out)
 
     items_sorted = sorted(items, key=lambda x: (x["hybrid_score"], x["popularity_score"]), reverse=True)
-    return jsonify({"recommendations": items_sorted[:n]}), 200
+    return jsonify({"items": items_sorted[:n]}), 200
 
 # -----------------------------
 # Predict
@@ -380,26 +413,72 @@ def api_predict():
     num_user_ratings = len(rating_matrix[user_id])
     confidence = min(0.95, 0.2 + 0.05 * num_user_ratings)
     return jsonify({
-        "Name": _movies_map[movie_id]["Name"],
-        "movie_id": movie_id,
-        "predicted_rating": round(float(pred),3),
-        "confidence": round(float(confidence),3),
-        "source": "hybrid_regressor_knn_stub"
-    }), 200
+    "name": _movies_map[movie_id]["Name"],
+    "movie_id": movie_id,
+    "predicted_rating": round(float(pred) * 2, 1),  
+    "confidence": round(float(confidence),3),
+    "source": "hybrid_regressor_knn_stub"
+}), 200
+
 
 # -----------------------------
 # Movie metadata
 # -----------------------------
 @app.route('/api/movie/<int:movie_id>', methods=['GET'])
 def api_movie(movie_id):
-    if movie_id not in _movies_map:
-        return jsonify({"error":"movie not found"}), 404
-    m = _movies_map[movie_id]
-    out = movie_to_output(m)
-    out["cluster_id"] = cluster_assignments.get(movie_id)
-    out["apriori_reasons"] = apriori_rules.get(movie_id, [])
-    app.logger.info("Movie endpoint used models: %s apriori:%s", kmeans_model.name, type(apriori_rules).__name__)
-    return jsonify(out), 200
+    OMDB_API_KEY = "2f0ad043"
+    OMDB_URL = "https://www.omdbapi.com/"
+
+    movie = _movies_map.get(movie_id)
+    if not movie:
+        return jsonify({"error": "Movie not found"}), 404
+
+    # If poster is missing or placeholder, fetch on-demand
+    poster_url = movie.get("poster")
+    if (
+        not poster_url
+        or "placeholder.com" in poster_url
+        or poster_url.strip() == ""
+        or poster_url.strip().upper() == "N/A"
+    ):
+        try:
+            params = {"t": movie["Name"], "apikey": OMDB_API_KEY}
+            r = requests.get(OMDB_URL, params=params, timeout=3)
+            data = r.json()
+
+            if data.get("Poster") and data["Poster"] != "N/A":
+                poster_url = data["Poster"]
+                movie["poster"] = poster_url
+                # Save it in DB safely
+                with db.engine.begin() as conn:
+                    conn.execute(
+                        db.text("UPDATE movies SET poster_url = :p WHERE rowid = :id"),
+                        {"p": poster_url, "id": movie_id},
+                    )
+                print(f"✅ Poster fetched on demand for '{movie['Name']}'")
+            else:
+                poster_url = f"https://via.placeholder.com/300x420/1a1a2e/ffffff?text={movie['Name'].replace(' ', '+')}"
+                movie["poster"] = poster_url
+                print(f"⚠️ No poster found for '{movie['Name']}', using placeholder.")
+        except Exception as e:
+            print(f"⚠️ Poster fetch failed for '{movie['Name']}': {e}")
+            poster_url = f"https://via.placeholder.com/300x420/1a1a2e/ffffff?text={movie['Name'].replace(' ', '+')}"
+            movie["poster"] = poster_url
+
+    # Return movie details with valid poster
+    return jsonify({
+        "movie_id": movie_id,
+        "Name": movie["Name"],
+        "year": movie["Year"],
+        "duration": movie["Duration"],
+        "Rating": movie["Rating"],
+        "Votes": movie["Votes"],
+        "poster": movie["poster"],
+        "Director": movie["Director"],
+        "Actor 1": movie["Actor 1"],
+        "Actor 2": movie["Actor 2"],
+        "Actor 3": movie["Actor 3"],
+    })
 
 # -----------------------------
 # Archive (user history) - simple read
@@ -421,7 +500,7 @@ def api_archive():
             o = movie_to_output(m)
             o["user_rating"] = r
             out.append(o)
-    return jsonify({"archive": out}), 200
+    return jsonify({"archived": out}), 200
 
 # -----------------------------
 # Health
@@ -429,6 +508,24 @@ def api_archive():
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({"status":"ok"}), 200
+from flask import send_from_directory
+
+# -----------------------------
+# Frontend routes (absolute path)
+# -----------------------------
+FRONTEND_DIR = r"C:\Users\Admin\OneDrive\Desktop\AIML-Mini-project\templates"  # <-- paste your actual path here
+
+@app.route('/')
+def serve_index():
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+@app.route('/dashboard')
+def serve_dashboard():
+    return send_from_directory(FRONTEND_DIR, 'Dashboard.html')
+
+@app.route('/<path:path>')
+def serve_static_files(path):
+    return send_from_directory(FRONTEND_DIR, path)
 
 # -----------------------------
 # Run

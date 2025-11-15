@@ -699,282 +699,267 @@
         </div>
     </div>
 
-    <script>
-        // API configuration
-        const API = 'http://127.0.0.1:5000';
+ <script>
+    // API configuration
+    const API = 'http://127.0.0.1:5000';
 
-        // State variables
-        let topPicks = [];
-        let becauseX = [];
-        let similar = [];
-        let trending = [];
-        let archive = [];
-        let userId = null;
+    // State variables
+    let topPicks = [];
+    let becauseX = [];
+    let similar = [];
+    let trending = [];
+    let archive = [];
+    let userId = null;
 
-        // DOM elements
-        const loadingIndicator = document.getElementById('loadingIndicator');
-        const recommendationsContent = document.getElementById('recommendationsContent');
-        const userIdDisplay = document.getElementById('userIdDisplay');
-        const movieModal = document.getElementById('movieModal');
-        const closeModal = document.getElementById('closeModal');
+    // DOM elements
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const recommendationsContent = document.getElementById('recommendationsContent');
+    const userIdDisplay = document.getElementById('userIdDisplay');
+    const movieModal = document.getElementById('movieModal');
+    const closeModal = document.getElementById('closeModal');
 
-        // Initialize dashboard
-        document.addEventListener('DOMContentLoaded', function() {
-            // Get user ID from localStorage or URL parameter
-            userId = getUserId();
-            if (!userId) {
-                alert('User ID not found. Please log in again.');
-                window.location.href = 'login.html';
-                return;
+    // Initialize dashboard
+    document.addEventListener('DOMContentLoaded', function() {
+        // Get user ID from localStorage or URL parameter
+        userId = getUserId();
+        if (!userId) {
+            alert('User ID not found. Please log in again.');
+            window.location.href = 'login.html';
+            return;
+        }
+        
+        userIdDisplay.textContent = userId;
+        fetchAllData();
+        
+        // Set up modal close event
+        closeModal.addEventListener('click', closeMovieModal);
+        movieModal.addEventListener('click', function(e) {
+            if (e.target === movieModal) {
+                closeMovieModal();
             }
-            
-            userIdDisplay.textContent = userId;
-            fetchAllData();
-            
-            // Set up modal close event
-            closeModal.addEventListener('click', closeMovieModal);
-            movieModal.addEventListener('click', function(e) {
-                if (e.target === movieModal) {
-                    closeMovieModal();
-                }
-            });
         });
+    });
 
-        // Get user ID from localStorage or URL
-        function getUserId() {
-            // Try to get from URL parameters first
-            const urlParams = new URLSearchParams(window.location.search);
-            let id = urlParams.get('user_id');
-            
-            if (!id) {
-                // Try to get from localStorage (set during login)
-                id = localStorage.getItem('user_id');
-            }
-            
-            return id;
-        }
+    // Get user ID from localStorage or URL
+    function getUserId() {
+        const urlParams = new URLSearchParams(window.location.search);
+        let id = urlParams.get('user_id');
+        if (!id) id = localStorage.getItem('user_id');
+        return id;
+    }
 
-        // Fetch all dashboard data
-        async function fetchAllData() {
+    // Fetch all dashboard data
+    async function fetchAllData() {
+        try {
+            const q = `?user_id=${userId}&n=20`;
+            const recRes = await fetch(`${API}/api/recommendations${q}`);
+            const recJson = await recRes.json();
+            const items = recJson.items || recJson.recommendations || [];
+
+            topPicks = items.slice(0, 6);
+            becauseX = items.filter((_, i) => i % 5 === 0).slice(0, 6);
+            similar = items.filter((_, i) => i % 5 === 1).slice(0, 6);
+            trending = items.filter((_, i) => i % 5 === 2).slice(0, 6);
+
             try {
-                const q = `?user_id=${userId}&n=20`;
-                const recRes = await fetch(`${API}/api/recommendations${q}`);
-                const recJson = await recRes.json();
-                
-                // API returns `hybrid` ordered array in `items`
-                const items = recJson.items || [];
-                topPicks = items.slice(0, 6);
-                
-                // For demo, split into carousels
-                becauseX = items.filter((_, i) => i % 5 === 0).slice(0, 6);
-                similar = items.filter((_, i) => i % 5 === 1).slice(0, 6);
-                trending = items.filter((_, i) => i % 5 === 2).slice(0, 6);
-                
-                // Archive request (user history) - placeholder
-                try {
-                    const archRes = await fetch(`${API}/api/user/archive?user_id=${userId}`);
-                    const archJson = await archRes.json();
-                    archive = archJson.archived || [];
-                } catch (e) {
-                    console.error('Error fetching archive:', e);
-                    archive = [];
-                }
-                
-                renderDashboard();
+                const archRes = await fetch(`${API}/api/user/archive?user_id=${userId}`);
+                const archJson = await archRes.json();
+                archive = archJson.archive || [];
             } catch (e) {
-                console.error('Dashboard fetch error', e);
-                loadingIndicator.innerHTML = '<p>Error loading recommendations. Please try again.</p>';
+                console.error('Error fetching archive:', e);
+                archive = [];
             }
-        }
 
-        // Render the dashboard with fetched data
-        function renderDashboard() {
-            // Hide loading indicator and show content
-            loadingIndicator.style.display = 'none';
-            recommendationsContent.style.display = 'block';
-            
-            // Populate carousels
-            populateCarousel('topPicksCarousel', topPicks);
-            populateCarousel('becauseXCarousel', becauseX);
-            populateCarousel('similarCarousel', similar);
-            populateCarousel('trendingCarousel', trending);
-            
-            // Populate archive
-            populateArchive('archiveGrid', archive);
-            
-            // Render analytics chart
-            renderBarChart(topPicks.slice(0, 6));
+            renderDashboard();
+        } catch (e) {
+            console.error('Dashboard fetch error', e);
+            loadingIndicator.innerHTML = '<p>Error loading recommendations. Please try again.</p>';
         }
+    }
 
-        // Populate a carousel with movie data
-        function populateCarousel(carouselId, items) {
-            const carousel = document.getElementById(carouselId);
-            
-            if (items.length === 0) {
-                carousel.innerHTML = '<div class="empty-state">No recommendations available</div>';
-                return;
-            }
-            
-            carousel.innerHTML = '';
-            
-            items.forEach(item => {
-                const movieCard = document.createElement('div');
-                movieCard.className = 'movie-card';
-                movieCard.addEventListener('click', () => openMovie(item.movie_id));
-                
-                movieCard.innerHTML = `
-                    <div class="poster-container">
-                        <img src="${item.poster}" alt="${item.Name}" class="movie-poster" onerror="this.src='https://via.placeholder.com/200x280/333/fff?text=No+Poster'">
-                        <div class="rating-badge">
-                            ${item.Rating} <span class="rating-max">/10</span>
-                        </div>
+    // Render dashboard
+    function renderDashboard() {
+        loadingIndicator.style.display = 'none';
+        recommendationsContent.style.display = 'block';
+        populateCarousel('topPicksCarousel', topPicks);
+        populateCarousel('becauseXCarousel', becauseX);
+        populateCarousel('similarCarousel', similar);
+        populateCarousel('trendingCarousel', trending);
+        populateArchive('archiveGrid', archive);
+        renderBarChart(topPicks.slice(0, 6));
+    }
+
+    // Populate carousel
+    function populateCarousel(carouselId, items) {
+        const carousel = document.getElementById(carouselId);
+        if (items.length === 0) {
+            carousel.innerHTML = '<div class="empty-state">No recommendations available</div>';
+            return;
+        }
+        carousel.innerHTML = '';
+
+        items.forEach(item => {
+            const movieCard = document.createElement('div');
+            movieCard.className = 'movie-card';
+            movieCard.addEventListener('click', () => openMovie(item.movie_id));
+
+            movieCard.innerHTML = `
+                <div class="poster-container">
+                    <img src="${item.poster}" alt="${item.name}" class="movie-poster" 
+                         onerror="this.src='https://via.placeholder.com/200x280/333/fff?text=No+Poster'">
+                    <div class="rating-badge">
+                        ${item.rating || 'N/A'} <span class="rating-max">/10</span>
                     </div>
-                    <div class="movie-info">
-                        <h4 class="movie-title">${item.Name}</h4>
-                        <div class="movie-meta">
-                            <span>${item.year}</span>
-                            <span>•</span>
-                            <span>${item.duration} min</span>
-                        </div>
-                        <div class="votes">${item.Votes} votes</div>
+                </div>
+                <div class="movie-info">
+                    <h4 class="movie-title">${item.name || 'Unknown'}</h4>
+                    <div class="movie-meta">
+                        <span>${item.year || '—'}</span>
+                        <span>•</span>
+                        <span>${item.duration || '—'} min</span>
                     </div>
-                `;
-                
-                carousel.appendChild(movieCard);
-            });
-        }
-
-        // Populate archive grid
-        function populateArchive(archiveId, items) {
-            const archiveGrid = document.getElementById(archiveId);
-            
-            if (items.length === 0) {
-                archiveGrid.innerHTML = '<div class="empty-state">Your archive is empty</div>';
-                return;
-            }
-            
-            archiveGrid.innerHTML = '';
-            
-            items.forEach(item => {
-                const archiveItem = document.createElement('div');
-                archiveItem.className = 'archive-item';
-                archiveItem.addEventListener('click', () => openMovie(item.movie_id));
-                
-                archiveItem.innerHTML = `
-                    <div class="archive-poster">
-                        <img src="${item.poster}" alt="${item.Name}" onerror="this.src='https://via.placeholder.com/50x70/333/fff?text=No+Poster'">
-                    </div>
-                    <div class="archive-info">
-                        <h4 class="movie-title">${item.Name}</h4>
-                        <span class="movie-year">${item.year}</span>
-                    </div>
-                `;
-                
-                archiveGrid.appendChild(archiveItem);
-            });
-        }
-
-        // Open movie details modal
-        async function openMovie(movieId) {
-            try {
-                // Fetch movie metadata
-                const m = await fetch(`${API}/api/movie/${movieId}`);
-                const meta = await m.json();
-                
-                // Fetch prediction
-                const p = await fetch(`${API}/api/predict?user_id=${userId}&movie_id=${movieId}`);
-                const pred = await p.json();
-                
-                // Populate modal with data
-                document.getElementById('modalPoster').src = meta.poster || 'https://via.placeholder.com/300x450/333/fff?text=No+Poster';
-                document.getElementById('modalTitle').textContent = meta.Name;
-                document.getElementById('modalYear').textContent = meta.year;
-                document.getElementById('modalDuration').textContent = `${meta.duration} min`;
-                document.getElementById('modalRating').textContent = meta.Rating;
-                document.getElementById('modalVotes').textContent = meta.Votes;
-                document.getElementById('modalPredictedRating').textContent = pred.predicted_rating || 'N/A';
-                document.getElementById('modalConfidence').textContent = pred.confidence || 'N/A';
-                
-                // Show modal
-                movieModal.style.display = 'flex';
-                
-                // Log to console as in original
-                console.log('movie metadata', meta);
-                console.log('predicted rating', pred);
-            } catch (error) {
-                console.error('Error fetching movie details:', error);
-                alert('Error loading movie details. Please try again.');
-            }
-        }
-
-        // Close movie modal
-        function closeMovieModal() {
-            movieModal.style.display = 'none';
-        }
-
-        // Render bar chart for analytics
-        function renderBarChart(data) {
-            const svg = document.getElementById('analyticsChart');
-            svg.innerHTML = '';
-            
-            // Add gradient definitions back (they get cleared when we set innerHTML)
-            const defs = document.createElement('defs');
-            defs.innerHTML = `
-                <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#6a11cb" />
-                    <stop offset="100%" stop-color="#2575fc" />
-                </linearGradient>
-                <linearGradient id="barGradientHover" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="#7d2cff" />
-                    <stop offset="100%" stop-color="#3d8cff" />
-                </linearGradient>
+                    <div class="votes">${item.votes || 0} votes</div>
+                </div>
             `;
-            svg.appendChild(defs);
-            
-            if (!data || data.length === 0) {
-                svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="rgba(255,255,255,0.6)">No chart data available</text>';
-                return;
-            }
-            
-            const max = Math.max(...data.map(d => parseFloat(d.Rating || 0))) || 1;
-            const barWidth = 80;
-            const spacing = 20;
-            
-            data.forEach((d, i) => {
-                const val = (parseFloat(d.Rating || 0) / max) * 120;
-                const x = i * (barWidth + spacing) + spacing;
-                
-                const barGroup = document.createElement('g');
-                barGroup.className = 'bar-group';
-                
-                barGroup.innerHTML = `
-                    <rect 
-                        x="${x}" 
-                        y="${180 - val}" 
-                        width="${barWidth}" 
-                        height="${val}" 
-                        rx="6"
-                        class="bar"
-                    />
-                    <text 
-                        x="${x + barWidth/2}" 
-                        y="195" 
-                        class="bar-label"
-                    >
-                        ${d.Name.length > 10 ? d.Name.substring(0, 10) + '...' : d.Name}
-                    </text>
-                    <text 
-                        x="${x + barWidth/2}" 
-                        y="${175 - val}" 
-                        class="bar-value"
-                    >
-                        ${d.Rating}
-                    </text>
-                `;
-                
-                svg.appendChild(barGroup);
-            });
+            carousel.appendChild(movieCard);
+        });
+    }
+
+    // Populate archive
+    function populateArchive(archiveId, items) {
+        const archiveGrid = document.getElementById(archiveId);
+        if (items.length === 0) {
+            archiveGrid.innerHTML = '<div class="empty-state">Your archive is empty</div>';
+            return;
         }
-    </script>
+
+        archiveGrid.innerHTML = '';
+        items.forEach(item => {
+            const archiveItem = document.createElement('div');
+            archiveItem.className = 'archive-item';
+            archiveItem.addEventListener('click', () => openMovie(item.movie_id));
+
+            archiveItem.innerHTML = `
+                <div class="archive-poster">
+                    <img src="${item.poster}" alt="${item.name}" 
+                         onerror="this.src='https://via.placeholder.com/50x70/333/fff?text=No+Poster'">
+                </div>
+                <div class="archive-info">
+                    <h4 class="movie-title">${item.name}</h4>
+                    <span class="movie-year">${item.year}</span>
+                </div>
+            `;
+            archiveGrid.appendChild(archiveItem);
+        });
+    }
+
+    // Open movie modal
+    async function openMovie(movieId) {
+        try {
+            const m = await fetch(`${API}/api/movie/${movieId}`);
+            const meta = await m.json();
+            const p = await fetch(`${API}/api/predict?user_id=${userId}&movie_id=${movieId}`);
+            const pred = await p.json();
+
+            document.getElementById('modalPoster').src = meta.poster || 'https://via.placeholder.com/300x450/333/fff?text=No+Poster';
+            document.getElementById('modalTitle').textContent = meta.name || 'Unknown';
+            document.getElementById('modalYear').textContent = meta.year || '—';
+            document.getElementById('modalDuration').textContent = `${meta.duration || '—'} min`;
+            document.getElementById('modalRating').textContent = meta.rating || 'N/A';
+            document.getElementById('modalVotes').textContent = meta.votes || 0;
+            document.getElementById('modalPredictedRating').textContent = pred.predicted_rating || 'N/A';
+            document.getElementById('modalConfidence').textContent = pred.confidence || 'N/A';
+
+            document.querySelector('.btn-secondary').onclick = () => {
+                const ratingValue = prompt("Rate this movie (1–10):");
+                const numeric = parseFloat(ratingValue);
+                if (!isNaN(numeric) && numeric >= 1 && numeric <= 10) {
+                    rateMovie(movieId, numeric);
+                } else {
+                    alert("Please enter a valid rating between 1 and 10.");
+                }
+            };
+
+            movieModal.style.display = 'flex';
+            console.log('movie metadata', meta);
+            console.log('predicted rating', pred);
+        } catch (error) {
+            console.error('Error fetching movie details:', error);
+            alert('Error loading movie details. Please try again.');
+        }
+    }
+
+    // Handle rating
+    async function rateMovie(movieId, ratingValue) {
+        if (!userId) {
+            alert("User ID not found. Please log in again.");
+            return;
+        }
+        try {
+            const res = await fetch(`${API}/api/rate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    movie_id: movieId,
+                    rating: ratingValue
+                })
+            });
+
+            const data = await res.json();
+            if (res.ok) alert(`Rated ${ratingValue} successfully!`);
+            else alert(`${data.error || "Rating failed."}`);
+        } catch (err) {
+            console.error("Error rating movie:", err);
+            alert("Error rating movie.");
+        }
+    }
+
+    // Close modal
+    function closeMovieModal() {
+        movieModal.style.display = 'none';
+    }
+
+    // Render bar chart
+    function renderBarChart(data) {
+        const svg = document.getElementById('analyticsChart');
+        svg.innerHTML = '';
+        const defs = document.createElement('defs');
+        defs.innerHTML = `
+            <linearGradient id="barGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#6a11cb" />
+                <stop offset="100%" stop-color="#2575fc" />
+            </linearGradient>
+            <linearGradient id="barGradientHover" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#7d2cff" />
+                <stop offset="100%" stop-color="#3d8cff" />
+            </linearGradient>
+        `;
+        svg.appendChild(defs);
+
+        if (!data || data.length === 0) {
+            svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" fill="rgba(255,255,255,0.6)">No chart data available</text>';
+            return;
+        }
+
+        const max = Math.max(...data.map(d => parseFloat(d.rating || 0))) || 1;
+        const barWidth = 80, spacing = 20;
+
+        data.forEach((d, i) => {
+            const val = (parseFloat(d.rating || 0) / max) * 120;
+            const x = i * (barWidth + spacing) + spacing;
+            const barGroup = document.createElement('g');
+            barGroup.className = 'bar-group';
+            barGroup.innerHTML = `
+                <rect x="${x}" y="${180 - val}" width="${barWidth}" height="${val}" rx="6" class="bar"/>
+                <text x="${x + barWidth/2}" y="195" class="bar-label">
+                    ${d.name.length > 10 ? d.name.substring(0, 10) + '...' : d.name}
+                </text>
+                <text x="${x + barWidth/2}" y="${175 - val}" class="bar-value">${d.rating}</text>
+            `;
+            svg.appendChild(barGroup);
+        });
+    }
+</script>
 </body>
 </html>
